@@ -9,6 +9,9 @@ import sys
 from rich.console import Console
 from rich.table import Table
 
+# Set the maximum number of ticks to keep in the DataFrames
+max_ticks = 1000
+
 tick_size = 10
 global cumulative_sell_df, cumulative_buy_df, cumulative_df, combined_candle_df
 
@@ -36,26 +39,11 @@ table.add_column("DELTA", justify="right", width=10)
 table.add_column("CVD", justify="right", width=10)
 
 def display_data(df):
-    console.print("[bold magenta]INSIDEa[/bold magenta]")
-
     # console.print(table)
     print(df)
 
     # Print the table rows with the latest values from the DataFrame
     console.print(df[['SI', 'v_sell', 'v_buy', 'BI', 'DELTA', 'CVD']])
-    # for index, row in df.iterrows():
-
-    #     console.print(
-    #         f"{index[0]}\t{index[1]}\t{row['v_sell']:.2f}\t{row['v_buy']:.2f}\t{'' if pd.isna(row['prev_v_buy']) else row['prev_v_buy']:.2f}\t{row['SI']:.2f}\t{row['BI']:.2f}\t{row['DELTA']:.2f}\t{row['CVD']:.2f}"
-    #     )
-
-    # for index, row in df.iterrows():
-    #     print(row)
-    #     print(index)
-    # table.add_row('','','','','','','','','','')
-
-    # # console.clear()
-    # console.print(table)
 
 def clear_line():
     sys.stdout.write("\033[F")  # Move the cursor up one line
@@ -85,27 +73,28 @@ def process_tick(tick_data):
     if not tick_df.dropna().empty:
         cumulative_df = pd.concat([cumulative_df, tick_df], ignore_index=True, sort=False, verify_integrity=True)
 
+         # Trim the DataFrames to keep only the last 'max_ticks' entries
+        cumulative_df = cumulative_df.tail(max_ticks)
+        cumulative_sell_df = cumulative_sell_df.tail(max_ticks)
+        cumulative_buy_df = cumulative_buy_df.tail(max_ticks)
+
         # Check if it's a buy or sell tick
         if tick_data["S"] == "Sell":
             cumulative_sell_df = pd.concat([cumulative_sell_df, tick_df], ignore_index=True, sort=False)
         elif tick_data["S"] == "Buy":
             cumulative_buy_df = pd.concat([cumulative_buy_df, tick_df], ignore_index=True, sort=False)
+    calculate_and_print_aggregates(timeframe='1Min')
+
 
 def calculate_and_print_aggregates(timeframe='1Min'):
     try:
-        print(f'CALCULATING AGGREGATES FOR {timeframe} CANDLES!')
         global cumulative_sell_df, cumulative_buy_df, combined_candle_df
-
-        # Calculate price_bin using NumPy vectorized operations
-        # cumulative_sell_df["price_bin"] = (np.floor(cumulative_sell_df["p"] / tick_size) * tick_size) #.astype(int)
-        # cumulative_buy_df["price_bin"] = (np.floor(cumulative_buy_df["p"] / tick_size) * tick_size) #.astype(int)
 
         # Define bin edges
         bin_edges = range(int(cumulative_sell_df["p"].min() // tick_size) * tick_size, int(cumulative_sell_df["p"].max() // tick_size + 2) * tick_size, tick_size)
 
         cumulative_sell_df["price_bin"] = pd.cut(cumulative_sell_df["p"], bins=bin_edges, labels=False) * tick_size + bin_edges[0]
         cumulative_buy_df["price_bin"] = pd.cut(cumulative_buy_df["p"], bins=bin_edges, labels=False) * tick_size + bin_edges[0]
-        print(f'CALCULATING AGGREGATES FOR {timeframe} CANDLES 3!')
 
         # Select the appropriate aggregation frequency based on the timeframe parameter
         if timeframe == '1Min':
@@ -120,9 +109,6 @@ def calculate_and_print_aggregates(timeframe='1Min'):
         # Aggregate data over 1-minute intervals using NumPy operations
         cumulative_sell_aggregated = cumulative_sell_df.groupby([pd.Grouper(key='T', freq=frequency), 'price_bin']).agg({'v': 'sum'})
         cumulative_buy_aggregated = cumulative_buy_df.groupby([pd.Grouper(key='T', freq=frequency), 'price_bin']).agg({'v': 'sum'})
-
-        print(f'CALCULATING AGGREGATES FOR {timeframe} CANDLES 2!')
-
 
         # Merge the aggregated DataFrames
         combined_candle_df = pd.merge(cumulative_sell_aggregated, cumulative_buy_aggregated, how='outer', left_index=True, right_index=True, suffixes=('_sell', '_buy'))
@@ -171,33 +157,14 @@ def calculate_and_print_aggregates(timeframe='1Min'):
         # Calculate cumulative delta for the entire candle
         combined_candle_df['CVD'] = combined_candle_df.groupby(level=0)['DELTA'].cumsum()
 
-        # Find minimum and maximum cumulative delta for the entire candle
-        # min_cumulative_delta_price_bin = combined_candle_df.groupby(level=1)['CVD'].min()
-        # max_cumulative_delta_price_bin = combined_candle_df.groupby(level=1)['CVD'].max()
-
-        # Merge the minimum and maximum cumulative delta back to the main DataFrame
-        # combined_candle_df = pd.merge(combined_candle_df, min_cumulative_delta_price_bin.rename('MIN_CD'), how='left', left_on='price_bin', right_index=True)
-        # combined_candle_df = pd.merge(combined_candle_df, max_cumulative_delta_price_bin.rename('MAX_CD'), how='left', left_on='price_bin', right_index=True)
-
-
-        # Print or use MIN_CD and MAX_CD as needed
-        # print("Minimum Cumulative Delta for the Entire Candle:")
-        # print(MIN_CD)
-
-        # print("\nMaximum Cumulative Delta for the Entire Candle:")
-        # print(MAX_CD)
-
+        # Trim the combined_candle_df to keep only the last 2 entries
+        combined_candle_df = combined_candle_df.tail(10)
 
         # Print combined DataFrame
         print(f"\nCombined Candle DataFrame - {timeframe} Intervals:")
-        # print(combined_candle_df[['SI', 'v_sell', 'v_buy', 'BI', 'DELTA', 'CVD','MIN_CD', 'MAX_CD']])
-        # display_data(combined_candle_df)
-        # console.print("[bold magenta]This text is bold and magenta[/bold magenta]")
 
         print_updated_dataframe(combined_candle_df, timeframe)
         # Display updated data
-
-
     except Exception as e:
         # Do nothing
         pass
@@ -244,44 +211,5 @@ def createWebsocketConnection():
 def start_thread():
     t = threading.Thread(target=createWebsocketConnection, args=()).start()
 
-# Start a thread to periodically print aggregates
-def start_aggregate_thread():
-    while True:
-        time.sleep(1)
-        calculate_and_print_aggregates('5Min')
-        # If the current time is not a multiple of 1 minute, wait till the next minute
-        # time.sleep(60 - datetime.now().second)
-
-        # Calculate and print aggregates
-        
-        # Wait for 1 second by default
-
 # Start threads
 start_thread()
-threading.Thread(target=start_aggregate_thread, args=()).start()
-
-
-# table = Table(show_header=True, header_style="bold magenta")
-# table.add_column("Timestamp", style="dim", width=20)
-# table.add_column("Price Bin")
-# table.add_column("Sell Volume", justify="right")
-# table.add_column("Buy Volume", justify="right")
-# table.add_column("Selling Imbalance", justify="right")
-# table.add_column("Buying Imbalance", justify="right")
-# table.add_column("Min Cumulative Delta", justify="right")
-# table.add_column("Max Cumulative Delta", justify="right")
-
-# # for index, row in df.iterrows():
-# #     table.add_row(
-# #         str(index[0]),  # Timestamp
-# #         str(row['price_bin']),
-# #         f"{row['v_sell']:.2f}",
-# #         f"{row['v_buy']:.2f}",
-# #         str(row['SI']),
-# #         str(row['BI']),
-# #         f"{row['DELTA']:.2f}",  # Min Cumulative Delta
-# #         f"{row['CVD']:.2f}"   # Max Cumulative Delta
-# #     )
-
-# console.clear()
-# console.print(table)
